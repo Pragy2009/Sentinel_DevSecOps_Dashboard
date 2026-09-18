@@ -37,3 +37,9 @@ redis_data/
 
 # Reports (generated)
 *.pdf
+
+# Local / temporary project files
+build.log
+CHANGES_SINCE_BATCH*.md
+DOCKER_COMPOSE_FIX*.md
+REVIEW.md
