@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+*.env.local
+!.env.example
+!backend/.env.example
+
+# Node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+npm-debug.log*
+
+# Docker volumes
+postgres_data/
+redis_data/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Sentinel workspaces
+/tmp/sentinel-workspaces/
+
+# Reports (generated)
+*.pdf

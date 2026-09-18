@@ -1,0 +1,130 @@
+networks:
+  sentinel_net:
+    driver: bridge
+
+volumes:
+  pg_data:
+  redis_data:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sentinel_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: sentinel_secret
+      POSTGRES_DB: sentinel_db
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - sentinel_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinel -d sentinel_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: sentinel_redis
+    restart: unless-stopped
+    # protected-mode no: required for inter-container access without a password.
+    # Safe here because no host ports are published — only sentinel_net can reach it.
+    # (Previous `--protected-mode yes` caused `Connection reset by peer` from
+    # backend/worker with healthy healthcheck, breaking POST /scans + OAuth state.)
+    command: redis-server --appendonly yes --protected-mode no
+    volumes:
+      - redis_data:/data
+    # No host ports: backend/worker reach redis via `redis:6379` internally.
+    # Exposing 6379 to the host is what caused `Possible SECURITY ATTACK`
+    # warnings — any HTTP probe (browser, curl, scanner) hitting
+    # localhost:6379 speaks HTTP to a RESP port. Uncomment below only for
+    # local debugging with redis-cli, never in production.
+    # ports:
+    #   - "127.0.0.1:6379:6379"
+    networks:
+      - sentinel_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+    container_name: sentinel_backend
+    restart: unless-stopped
+    # C6: least privilege + blast-radius limits (no new images).
+    # NOTE: no `pids_limit` — Compose maps it onto
+    # deploy.resources.limits.pids and rejects both being set.
+    user: "10000"
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=512M,mode=1777
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    env_file: ./backend/.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sentinel_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  worker:
+    build:
+      context: ./backend
+    container_name: sentinel_worker
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app.celery_app worker --loglevel=info --concurrency=2
+    # C6: least privilege + blast-radius limits (no new images).
+    user: "10000"
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=1G,mode=1777
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 3G
+    env_file: ./backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sentinel_net
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: sentinel_frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_WS_URL: ws://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - sentinel_net
